@@ -23,6 +23,14 @@ const outputSubDir = path.join(outputDir, `${prefix1}_${prefix2}`);
 
 const CONCURRENCY = Math.max(2, Math.floor(os.cpus().length / 2)); // Limit parallel jobs
 
+// Ensure all required folders exist
+async function ensureFolders() {
+  await fs.ensureDir('input');
+  await fs.ensureDir('output');
+  await fs.ensureDir('clips/video1');
+  await fs.ensureDir('clips/video2');
+}
+
 async function splitVideo(input, clipsDir, prefix) {
   await fs.ensureDir(clipsDir);
   const jobs = [];
@@ -103,6 +111,7 @@ async function mergeClips(prefix1, prefix2, outputSubDir) {
 
 (async () => {
   try {
+    await ensureFolders();
     console.log('Splitting video 1...');
     await splitVideo(input1, clipsDir1, prefix1);
     console.log('Splitting video 2...');

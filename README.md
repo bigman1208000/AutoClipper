@@ -49,9 +49,10 @@ node index.js
 ```
 
 - The script will:
-  - Split each input video into 30 clips of 4 seconds each
-  - Merge corresponding clips into 8-second videos
-  - Save the final merged videos in a subfolder of `output/` named `video1_video2`
+  - Automatically create all required folders (`input`, `output`, `clips/video1`, `clips/video2`) if they do not exist.
+  - Split each input video into 30 clips of 4 seconds each.
+  - Merge corresponding clips into 8-second videos.
+  - Save the final merged videos in a subfolder of `output/` named `video1_video2`.
 
 ---
 
@@ -65,6 +66,7 @@ node index.js
 
 - Make sure your input videos are at least 2 minutes (120 seconds) long.
 - If you want to process different videos, replace the files in the `input/` folder and re-run the script.
+- **No need to manually create any folders**—the script will handle this for you.
 
 ---
 
