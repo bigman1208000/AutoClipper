@@ -156,142 +156,123 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
       const finalOutPath = path.join(outputSubDir, `final_clip${String(i+1).padStart(2, '0')}.mp4`);
       
       try {
-        // Two-step process for better compatibility
-        const tempScaled1 = path.join(tempDir, `temp_scaled1_${timestamp}_clip${String(i+1).padStart(2, '0')}.mp4`);
-        const tempScaled2 = path.join(tempDir, `temp_scaled2_${timestamp}_clip${String(i+1).padStart(2, '0')}.mp4`);
-
-        try {
-          // Step 1: Scale and pad each video separately with optimized settings
-          console.log(`Step 1: Scaling first video for clip ${i+1}...`);
-          await new Promise((resolve, reject) => {
-            const command = ffmpeg(clip1)
-              .outputOptions([
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-crf', '28',
-                '-pix_fmt', 'yuv420p',
-                '-s', '1080x1920',
-                '-an',
-                '-y'
-              ])
-              .videoFilters('scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2')
-              .output(tempScaled1);
-
-            command.on('start', (cmd) => {
-              console.log(`FFmpeg command for first video: ${cmd}`);
-            });
-
-            command.on('progress', (progress) => {
-              console.log(`Scaling first video: ${Math.round(progress.percent)}% done`);
-            });
-
-            command.on('end', resolve);
-            command.on('error', (err) => {
-              console.error('Error scaling first video:', err);
-              reject(err);
-            });
-
-            command.run();
+        const probe1 = await new Promise((resolve, reject) => {
+          ffmpeg.ffprobe(clip1, (err, metadata) => {
+            if (err) reject(err);
+            else resolve(metadata);
           });
+        });
 
-          console.log(`Step 1: Scaling second video for clip ${i+1}...`);
-          await new Promise((resolve, reject) => {
-            const command = ffmpeg(clip2)
-              .outputOptions([
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-crf', '28',
-                '-pix_fmt', 'yuv420p',
-                '-s', '1080x1920',
-                '-an',
-                '-y'
-              ])
-              .videoFilters('scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2')
-              .output(tempScaled2);
-
-            command.on('start', (cmd) => {
-              console.log(`FFmpeg command for second video: ${cmd}`);
-            });
-
-            command.on('progress', (progress) => {
-              console.log(`Scaling second video: ${Math.round(progress.percent)}% done`);
-            });
-
-            command.on('end', resolve);
-            command.on('error', (err) => {
-              console.error('Error scaling second video:', err);
-              reject(err);
-            });
-
-            command.run();
+        const probe2 = await new Promise((resolve, reject) => {
+          ffmpeg.ffprobe(clip2, (err, metadata) => {
+            if (err) reject(err);
+            else resolve(metadata);
           });
+        });
 
-          // Step 2: Concatenate the scaled videos with optimized settings
-          console.log(`Step 2: Concatenating videos for clip ${i+1}...`);
-          await new Promise((resolve, reject) => {
-            const command = ffmpeg()
-              .input(tempScaled1)
-              .input(tempScaled2)
-              .outputOptions([
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-crf', '28',
-                '-pix_fmt', 'yuv420p',
-                '-an',
-                '-y'
-              ])
-              .complexFilter('[0:v][1:v]concat=n=2:v=1:a=0')
-              .output(tempOutPath);
+        const hasVideo1 = probe1.streams.some(s => s.codec_type === 'video');
+        const hasVideo2 = probe2.streams.some(s => s.codec_type === 'video');
 
-            command.on('start', (cmd) => {
-              console.log(`FFmpeg command for concatenation: ${cmd}`);
-            });
-
-            command.on('progress', (progress) => {
-              console.log(`Concatenating videos: ${Math.round(progress.percent)}% done`);
-            });
-
-            command.on('end', async () => {
-              try {
-                // Verify the output file exists and has content
-                const stats = await fs.stat(tempOutPath);
-                if (stats.size === 0) {
-                  throw new Error('Output file is empty');
-                }
-
-                // Clean up temporary files
-                await fs.remove(tempScaled1);
-                await fs.remove(tempScaled2);
-                
-                // Move the file from temp to final location
-                await fs.move(tempOutPath, finalOutPath, { overwrite: true });
-                console.log(`Successfully created ${finalOutPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
-                resolve();
-              } catch (error) {
-                console.error('Error in final processing:', error);
-                reject(error);
-              }
-            });
-
-            command.on('error', (err) => {
-              console.error('Error concatenating videos:', err);
-              reject(err);
-            });
-
-            command.run();
-          });
-        } catch (error) {
-          // Clean up any temporary files
-          try {
-            await fs.remove(tempScaled1);
-            await fs.remove(tempScaled2);
-            await fs.remove(tempOutPath);
-          } catch (cleanupError) {
-            // Ignore cleanup errors
-          }
-          throw error;
+        if (!hasVideo1 || !hasVideo2) {
+          console.log(`Skipping clip ${i+1} - One or both input files are missing video streams: ${clip1}, ${clip2}`);
+          continue; // Skip this clip and continue with the next one
         }
+
+        // Create temporary files for the scaled videos
+        const temp1 = path.join(tempDir, `temp1_${timestamp}_clip${String(i+1).padStart(2, '0')}.mp4`);
+        const temp2 = path.join(tempDir, `temp2_${timestamp}_clip${String(i+1).padStart(2, '0')}.mp4`);
+
+        // First, scale and pad each video separately
+        await new Promise((resolve, reject) => {
+          ffmpeg(clip1)
+            .outputOptions([
+              '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+              '-c:v', 'libx264',
+              '-preset', 'ultrafast',
+              '-crf', '23',
+              '-pix_fmt', 'yuv420p',
+              '-an',
+              '-y'
+            ])
+            .output(temp1)
+            .on('end', resolve)
+            .on('error', reject)
+            .run();
+        });
+
+        await new Promise((resolve, reject) => {
+          ffmpeg(clip2)
+            .outputOptions([
+              '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+              '-c:v', 'libx264',
+              '-preset', 'ultrafast',
+              '-crf', '23',
+              '-pix_fmt', 'yuv420p',
+              '-an',
+              '-y'
+            ])
+            .output(temp2)
+            .on('end', resolve)
+            .on('error', reject)
+            .run();
+        });
+
+        // Then concatenate the processed videos
+        await new Promise((resolve, reject) => {
+          ffmpeg()
+            .input(temp1)
+            .input(temp2)
+            .outputOptions([
+              '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0',
+              '-c:v', 'libx264',
+              '-preset', 'ultrafast',
+              '-crf', '23',
+              '-pix_fmt', 'yuv420p',
+              '-y'
+            ])
+            .output(tempOutPath)
+            .on('end', async () => {
+              // Clean up temporary files
+              try {
+                await fs.remove(temp1);
+                await fs.remove(temp2);
+              } catch (cleanupError) {
+                console.error('Error cleaning up temporary files:', cleanupError);
+              }
+              resolve();
+            })
+            .on('error', (err) => {
+              // Clean up temporary files
+              try {
+                fs.removeSync(temp1);
+                fs.removeSync(temp2);
+              } catch (cleanupError) {
+                console.error('Error cleaning up temporary files:', cleanupError);
+              }
+              reject(err);
+            })
+            .run();
+        });
+
+        // Verify the temporary file exists and has content
+        const stats = await fs.stat(tempOutPath);
+        if (stats.size === 0) {
+          throw new Error('Temporary output file is empty');
+        }
+        
+        // Move the file from temp to final location
+        await fs.move(tempOutPath, finalOutPath, { overwrite: true });
+        console.log(`Successfully created ${finalOutPath}`);
+
       } catch (error) {
+        // Clean up temporary files if they exist
+        try {
+          await fs.remove(temp1);
+          await fs.remove(temp2);
+          await fs.remove(tempOutPath);
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
         console.error(`Failed to merge clips for ${prefix1} and ${prefix2} at index ${i+1}:`, error);
         throw error; // Re-throw to prevent moving to completed folder
       }
