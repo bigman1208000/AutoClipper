@@ -156,134 +156,100 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
       const finalOutPath = path.join(outputSubDir, `final_clip${String(i+1).padStart(2, '0')}.mp4`);
       
       try {
-        const command = ffmpeg()
-          .input(clip1)
-          .input(clip2);
+        // Two-step process for better compatibility
+        const tempScaled1 = path.join(tempDir, `temp_scaled1_${timestamp}_clip${String(i+1).padStart(2, '0')}.mp4`);
+        const tempScaled2 = path.join(tempDir, `temp_scaled2_${timestamp}_clip${String(i+1).padStart(2, '0')}.mp4`);
 
-        // Check if both files have video streams before processing
         try {
-          const probe1 = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(clip1, (err, metadata) => {
-              if (err) reject(err);
-              else resolve(metadata);
-            });
-          });
-
-          const probe2 = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(clip2, (err, metadata) => {
-              if (err) reject(err);
-              else resolve(metadata);
-            });
-          });
-
-          const hasVideo1 = probe1.streams.some(s => s.codec_type === 'video');
-          const hasVideo2 = probe2.streams.some(s => s.codec_type === 'video');
-
-          if (!hasVideo1 || !hasVideo2) {
-            console.warn(`Skipping clip ${i+1} - One or both input files are missing video streams: ${clip1}, ${clip2}`);
-            return; // Skip this clip and continue with the next one
-          }
-
-          // Simpler filter chain for older FFmpeg versions with optimized settings
-          command
-            .complexFilter(
-              '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];' +
-              '[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v1];' +
-              '[v0][v1]concat=n=2:v=1:a=0',
-              []
-            )
-            .outputOptions([
-              '-c:v', 'libx264',
-              '-preset', 'veryfast',  // Changed from ultrafast to veryfast for better performance
-              '-crf', '23',
-              '-pix_fmt', 'yuv420p',
-              '-s', '1080x1920',
-              '-an',
-              '-y',
-              '-threads', '0',  // Let FFmpeg choose optimal thread count
-              '-max_muxing_queue_size', '1024'  // Increase muxing queue size
-            ])
-            .outputOptions('-movflags', '+faststart');
-
-          // Add input options for better performance
-          command
-            .inputOptions([
-              '-thread_queue_size', '1024',  // Increase thread queue size
-              '-analyzeduration', '2147483647',  // Maximum analyze duration
-              '-probesize', '2147483647'  // Maximum probe size
-            ]);
-
-          command.output(tempOutPath);
-
-          // Add timeout to prevent hanging
-          const timeout = setTimeout(() => {
-            console.error(`Processing timeout for clip ${i+1}`);
-            command.kill('SIGKILL');
-            reject(new Error('Processing timeout'));
-          }, 300000); // 5 minute timeout
-
+          // Step 1: Scale and pad each video separately
+          console.log(`Step 1: Scaling first video for clip ${i+1}...`);
           await new Promise((resolve, reject) => {
-            command.on('start', (commandLine) => {
-              console.log(`Starting FFmpeg for clip ${i+1} with command: ${commandLine}`);
-            });
+            ffmpeg(clip1)
+              .outputOptions([
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '23',
+                '-pix_fmt', 'yuv420p',
+                '-s', '1080x1920',
+                '-an',
+                '-y'
+              ])
+              .videoFilters('scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2')
+              .output(tempScaled1)
+              .on('end', resolve)
+              .on('error', reject)
+              .run();
+          });
 
-            command.on('progress', (progress) => {
-              console.log(`Processing clip ${i+1}: ${Math.round(progress.percent)}% done (${progress.frames} frames processed)`);
-            });
+          console.log(`Step 1: Scaling second video for clip ${i+1}...`);
+          await new Promise((resolve, reject) => {
+            ffmpeg(clip2)
+              .outputOptions([
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '23',
+                '-pix_fmt', 'yuv420p',
+                '-s', '1080x1920',
+                '-an',
+                '-y'
+              ])
+              .videoFilters('scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2')
+              .output(tempScaled2)
+              .on('end', resolve)
+              .on('error', reject)
+              .run();
+          });
 
-            command.on('stderr', (stderrLine) => {
-              if (stderrLine.includes('frame=') || stderrLine.includes('fps=')) {
-                console.log(`FFmpeg progress for clip ${i+1}: ${stderrLine.trim()}`);
-              }
-              // Log any errors or warnings
-              if (stderrLine.includes('Error') || stderrLine.includes('error') || stderrLine.includes('Error')) {
-                console.error(`FFmpeg warning/error for clip ${i+1}: ${stderrLine.trim()}`);
-              }
-            });
-
-            command.on('end', async () => {
-              clearTimeout(timeout);
-              try {
-                // Verify the temporary file exists and has content
-                const stats = await fs.stat(tempOutPath);
-                if (stats.size === 0) {
-                  throw new Error('Temporary output file is empty');
-                }
-                
-                // Move the file from temp to final location
-                await fs.move(tempOutPath, finalOutPath, { overwrite: true });
-                console.log(`Successfully created ${finalOutPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
-                resolve();
-              } catch (error) {
-                // Clean up temporary file if it exists
+          // Step 2: Concatenate the scaled videos
+          console.log(`Step 2: Concatenating videos for clip ${i+1}...`);
+          await new Promise((resolve, reject) => {
+            ffmpeg()
+              .input(tempScaled1)
+              .input(tempScaled2)
+              .outputOptions([
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '23',
+                '-pix_fmt', 'yuv420p',
+                '-an',
+                '-y'
+              ])
+              .complexFilter('[0:v][1:v]concat=n=2:v=1:a=0')
+              .output(tempOutPath)
+              .on('progress', (progress) => {
+                console.log(`Processing clip ${i+1}: ${Math.round(progress.percent)}% done (${progress.frames} frames processed)`);
+              })
+              .on('end', async () => {
                 try {
-                  await fs.remove(tempOutPath);
-                } catch (cleanupError) {
-                  // Ignore cleanup errors
+                  // Clean up temporary files
+                  await fs.remove(tempScaled1);
+                  await fs.remove(tempScaled2);
+                  
+                  // Move the file from temp to final location
+                  await fs.move(tempOutPath, finalOutPath, { overwrite: true });
+                  const stats = await fs.stat(finalOutPath);
+                  console.log(`Successfully created ${finalOutPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+                  resolve();
+                } catch (error) {
+                  reject(error);
                 }
-                reject(error);
-              }
-            });
-
-            command.on('error', (err, stdout, stderr) => {
-              clearTimeout(timeout);
-              // Clean up temporary file if it exists
-              try {
-                fs.removeSync(tempOutPath);
-              } catch (cleanupError) {
-                // Ignore cleanup errors
-              }
-              console.error('FFmpeg stderr:', stderr);
-              console.error('Error details:', err);
-              reject(new Error(`FFmpeg error: ${err.message}`));
-            });
-
-            console.log(`Starting to process clip ${i+1} of ${totalClips}...`);
-            command.run();
+              })
+              .on('error', (err) => {
+                console.error('FFmpeg error:', err);
+                reject(err);
+              })
+              .run();
           });
         } catch (error) {
-          console.warn(`Error checking video streams for clip ${i+1}: ${error.message}`);
-          return; // Skip this clip and continue with the next one
+          // Clean up any temporary files
+          try {
+            await fs.remove(tempScaled1);
+            await fs.remove(tempScaled2);
+            await fs.remove(tempOutPath);
+          } catch (cleanupError) {
+            // Ignore cleanup errors
+          }
+          throw error;
         }
       } catch (error) {
         console.error(`Failed to merge clips for ${prefix1} and ${prefix2} at index ${i+1}:`, error);
