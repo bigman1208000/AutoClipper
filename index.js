@@ -184,16 +184,16 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             return; // Skip this clip and continue with the next one
           }
 
-          // Basic filter chain with proper output mapping
+          // Basic filter chain with proper output mapping for older FFmpeg versions
           command
             .complexFilter(
               '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];' +
               '[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v1];' +
-              '[v0][v1]concat=n=2:v=1:a=0[v]',
-              ['v']
+              '[v0][v1]concat=n=2:v=1:a=0[outv]',
+              ['outv']
             )
             .outputOptions([
-              '-map', '[v]',
+              '-map', '[outv]',
               '-c:v', 'libx264',
               '-preset', 'ultrafast',
               '-crf', '23',
@@ -202,7 +202,7 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
               '-an',
               '-y'
             ])
-            .outputOptions('-movflags', '+faststart'); // Add faststart flag for better compatibility
+            .outputOptions('-movflags', '+faststart');
 
           command.output(tempOutPath);
         } catch (error) {
