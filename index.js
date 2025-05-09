@@ -184,16 +184,15 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             return; // Skip this clip and continue with the next one
           }
 
-          // Basic filter chain with proper output mapping for older FFmpeg versions
+          // Simpler filter chain for older FFmpeg versions
           command
             .complexFilter(
               '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];' +
               '[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v1];' +
-              '[v0][v1]concat=n=2:v=1:a=0[outv]',
-              ['outv']
+              '[v0][v1]concat=n=2:v=1:a=0',
+              []
             )
             .outputOptions([
-              '-map', '[outv]',
               '-c:v', 'libx264',
               '-preset', 'ultrafast',
               '-crf', '23',
