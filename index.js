@@ -211,15 +211,17 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
 
         await new Promise((resolve, reject) => {
           command.on('start', (commandLine) => {
-            // console.log(`Starting FFmpeg with command: ${commandLine}`);
+            console.log(`Starting FFmpeg for clip ${i+1} with command: ${commandLine}`);
           });
 
           command.on('progress', (progress) => {
-            // console.log(`Processing ${tempOutPath}: ${Math.round(progress.percent)}% done`);
+            console.log(`Processing clip ${i+1}: ${Math.round(progress.percent)}% done (${progress.frames} frames processed)`);
           });
 
           command.on('stderr', (stderrLine) => {
-            // console.log(`FFmpeg stderr: ${stderrLine}`);
+            if (stderrLine.includes('frame=') || stderrLine.includes('fps=')) {
+              console.log(`FFmpeg progress for clip ${i+1}: ${stderrLine.trim()}`);
+            }
           });
 
           command.on('end', async () => {
@@ -232,7 +234,7 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
               
               // Move the file from temp to final location
               await fs.move(tempOutPath, finalOutPath, { overwrite: true });
-              console.log(`Successfully created ${finalOutPath}`);
+              console.log(`Successfully created ${finalOutPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
               resolve();
             } catch (error) {
               // Clean up temporary file if it exists
@@ -257,6 +259,7 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             reject(new Error(`FFmpeg error: ${err.message}`));
           });
 
+          console.log(`Starting to process clip ${i+1} of ${totalClips}...`);
           command.run();
         });
       } catch (error) {
