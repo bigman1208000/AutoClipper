@@ -184,7 +184,7 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             return; // Skip this clip and continue with the next one
           }
 
-          // Simpler filter chain for older FFmpeg versions
+          // Simpler filter chain for older FFmpeg versions with optimized settings
           command
             .complexFilter(
               '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];' +
@@ -194,74 +194,97 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             )
             .outputOptions([
               '-c:v', 'libx264',
-              '-preset', 'ultrafast',
+              '-preset', 'veryfast',  // Changed from ultrafast to veryfast for better performance
               '-crf', '23',
               '-pix_fmt', 'yuv420p',
               '-s', '1080x1920',
               '-an',
-              '-y'
+              '-y',
+              '-threads', '0',  // Let FFmpeg choose optimal thread count
+              '-max_muxing_queue_size', '1024'  // Increase muxing queue size
             ])
             .outputOptions('-movflags', '+faststart');
 
+          // Add input options for better performance
+          command
+            .inputOptions([
+              '-thread_queue_size', '1024',  // Increase thread queue size
+              '-analyzeduration', '2147483647',  // Maximum analyze duration
+              '-probesize', '2147483647'  // Maximum probe size
+            ]);
+
           command.output(tempOutPath);
+
+          // Add timeout to prevent hanging
+          const timeout = setTimeout(() => {
+            console.error(`Processing timeout for clip ${i+1}`);
+            command.kill('SIGKILL');
+            reject(new Error('Processing timeout'));
+          }, 300000); // 5 minute timeout
+
+          await new Promise((resolve, reject) => {
+            command.on('start', (commandLine) => {
+              console.log(`Starting FFmpeg for clip ${i+1} with command: ${commandLine}`);
+            });
+
+            command.on('progress', (progress) => {
+              console.log(`Processing clip ${i+1}: ${Math.round(progress.percent)}% done (${progress.frames} frames processed)`);
+            });
+
+            command.on('stderr', (stderrLine) => {
+              if (stderrLine.includes('frame=') || stderrLine.includes('fps=')) {
+                console.log(`FFmpeg progress for clip ${i+1}: ${stderrLine.trim()}`);
+              }
+              // Log any errors or warnings
+              if (stderrLine.includes('Error') || stderrLine.includes('error') || stderrLine.includes('Error')) {
+                console.error(`FFmpeg warning/error for clip ${i+1}: ${stderrLine.trim()}`);
+              }
+            });
+
+            command.on('end', async () => {
+              clearTimeout(timeout);
+              try {
+                // Verify the temporary file exists and has content
+                const stats = await fs.stat(tempOutPath);
+                if (stats.size === 0) {
+                  throw new Error('Temporary output file is empty');
+                }
+                
+                // Move the file from temp to final location
+                await fs.move(tempOutPath, finalOutPath, { overwrite: true });
+                console.log(`Successfully created ${finalOutPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+                resolve();
+              } catch (error) {
+                // Clean up temporary file if it exists
+                try {
+                  await fs.remove(tempOutPath);
+                } catch (cleanupError) {
+                  // Ignore cleanup errors
+                }
+                reject(error);
+              }
+            });
+
+            command.on('error', (err, stdout, stderr) => {
+              clearTimeout(timeout);
+              // Clean up temporary file if it exists
+              try {
+                fs.removeSync(tempOutPath);
+              } catch (cleanupError) {
+                // Ignore cleanup errors
+              }
+              console.error('FFmpeg stderr:', stderr);
+              console.error('Error details:', err);
+              reject(new Error(`FFmpeg error: ${err.message}`));
+            });
+
+            console.log(`Starting to process clip ${i+1} of ${totalClips}...`);
+            command.run();
+          });
         } catch (error) {
           console.warn(`Error checking video streams for clip ${i+1}: ${error.message}`);
           return; // Skip this clip and continue with the next one
         }
-
-        await new Promise((resolve, reject) => {
-          command.on('start', (commandLine) => {
-            console.log(`Starting FFmpeg for clip ${i+1} with command: ${commandLine}`);
-          });
-
-          command.on('progress', (progress) => {
-            console.log(`Processing clip ${i+1}: ${Math.round(progress.percent)}% done (${progress.frames} frames processed)`);
-          });
-
-          command.on('stderr', (stderrLine) => {
-            if (stderrLine.includes('frame=') || stderrLine.includes('fps=')) {
-              console.log(`FFmpeg progress for clip ${i+1}: ${stderrLine.trim()}`);
-            }
-          });
-
-          command.on('end', async () => {
-            try {
-              // Verify the temporary file exists and has content
-              const stats = await fs.stat(tempOutPath);
-              if (stats.size === 0) {
-                throw new Error('Temporary output file is empty');
-              }
-              
-              // Move the file from temp to final location
-              await fs.move(tempOutPath, finalOutPath, { overwrite: true });
-              console.log(`Successfully created ${finalOutPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
-              resolve();
-            } catch (error) {
-              // Clean up temporary file if it exists
-              try {
-                await fs.remove(tempOutPath);
-              } catch (cleanupError) {
-                // Ignore cleanup errors
-              }
-              reject(error);
-            }
-          });
-
-          command.on('error', (err, stdout, stderr) => {
-            // Clean up temporary file if it exists
-            try {
-              fs.removeSync(tempOutPath);
-            } catch (cleanupError) {
-              // Ignore cleanup errors
-            }
-            console.error('FFmpeg stderr:', stderr);
-            console.error('Error details:', err);
-            reject(new Error(`FFmpeg error: ${err.message}`));
-          });
-
-          console.log(`Starting to process clip ${i+1} of ${totalClips}...`);
-          command.run();
-        });
       } catch (error) {
         console.error(`Failed to merge clips for ${prefix1} and ${prefix2} at index ${i+1}:`, error);
         throw error; // Re-throw to prevent moving to completed folder
