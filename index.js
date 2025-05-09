@@ -189,10 +189,11 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             .complexFilter(
               '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];' +
               '[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v1];' +
-              '[v0][v1]concat=n=2:v=1:a=0',
-              []
+              '[v0][v1]concat=n=2:v=1:a=0[v]',
+              ['v']
             )
             .outputOptions([
+              '-map', '[v]',
               '-c:v', 'libx264',
               '-preset', 'ultrafast',
               '-crf', '23',
@@ -200,7 +201,8 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
               '-s', '1080x1920',
               '-an',
               '-y'
-            ]);
+            ])
+            .outputOptions('-movflags', '+faststart'); // Add faststart flag for better compatibility
 
           command.output(tempOutPath);
         } catch (error) {
