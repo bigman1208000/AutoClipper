@@ -161,18 +161,21 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
         const tempScaled2 = path.join(tempDir, `temp_scaled2_${timestamp}_clip${String(i+1).padStart(2, '0')}.mp4`);
 
         try {
-          // Step 1: Scale and pad each video separately
+          // Step 1: Scale and pad each video separately with optimized settings
           console.log(`Step 1: Scaling first video for clip ${i+1}...`);
           await new Promise((resolve, reject) => {
             ffmpeg(clip1)
               .outputOptions([
                 '-c:v', 'libx264',
-                '-preset', 'veryfast',
-                '-crf', '23',
+                '-preset', 'ultrafast',  // Changed back to ultrafast for maximum speed
+                '-crf', '28',  // Increased CRF for faster encoding (slightly lower quality)
                 '-pix_fmt', 'yuv420p',
                 '-s', '1080x1920',
                 '-an',
-                '-y'
+                '-y',
+                '-threads', '0',  // Use all available CPU threads
+                '-tune', 'fastdecode',  // Optimize for fast decoding
+                '-movflags', '+faststart'
               ])
               .videoFilters('scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2')
               .output(tempScaled1)
@@ -186,12 +189,15 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             ffmpeg(clip2)
               .outputOptions([
                 '-c:v', 'libx264',
-                '-preset', 'veryfast',
-                '-crf', '23',
+                '-preset', 'ultrafast',
+                '-crf', '28',
                 '-pix_fmt', 'yuv420p',
                 '-s', '1080x1920',
                 '-an',
-                '-y'
+                '-y',
+                '-threads', '0',
+                '-tune', 'fastdecode',
+                '-movflags', '+faststart'
               ])
               .videoFilters('scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2')
               .output(tempScaled2)
@@ -200,19 +206,29 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
               .run();
           });
 
-          // Step 2: Concatenate the scaled videos
+          // Step 2: Concatenate the scaled videos with optimized settings
           console.log(`Step 2: Concatenating videos for clip ${i+1}...`);
           await new Promise((resolve, reject) => {
-            ffmpeg()
+            // Add timeout to prevent hanging
+            const timeout = setTimeout(() => {
+              console.error(`Processing timeout for clip ${i+1}`);
+              command.kill('SIGKILL');
+              reject(new Error('Processing timeout'));
+            }, 300000); // 5 minute timeout
+
+            const command = ffmpeg()
               .input(tempScaled1)
               .input(tempScaled2)
               .outputOptions([
                 '-c:v', 'libx264',
-                '-preset', 'veryfast',
-                '-crf', '23',
+                '-preset', 'ultrafast',
+                '-crf', '28',
                 '-pix_fmt', 'yuv420p',
                 '-an',
-                '-y'
+                '-y',
+                '-threads', '0',
+                '-tune', 'fastdecode',
+                '-movflags', '+faststart'
               ])
               .complexFilter('[0:v][1:v]concat=n=2:v=1:a=0')
               .output(tempOutPath)
@@ -220,6 +236,7 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
                 console.log(`Processing clip ${i+1}: ${Math.round(progress.percent)}% done (${progress.frames} frames processed)`);
               })
               .on('end', async () => {
+                clearTimeout(timeout);
                 try {
                   // Clean up temporary files
                   await fs.remove(tempScaled1);
@@ -235,10 +252,12 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
                 }
               })
               .on('error', (err) => {
+                clearTimeout(timeout);
                 console.error('FFmpeg error:', err);
                 reject(err);
-              })
-              .run();
+              });
+
+            command.run();
           });
         } catch (error) {
           // Clean up any temporary files
