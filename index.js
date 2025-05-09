@@ -156,21 +156,43 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
       const finalOutPath = path.join(outputSubDir, `final_clip${String(i+1).padStart(2, '0')}.mp4`);
       
       try {
-        await new Promise((resolve, reject) => {
-          const command = ffmpeg()
-            .input(clip1)
-            .input(clip2);
+        const command = ffmpeg()
+          .input(clip1)
+          .input(clip2);
 
-          // Use a filter chain that handles HDR to SDR conversion
+        // Check if both files have video streams before processing
+        try {
+          const probe1 = await new Promise((resolve, reject) => {
+            ffmpeg.ffprobe(clip1, (err, metadata) => {
+              if (err) reject(err);
+              else resolve(metadata);
+            });
+          });
+
+          const probe2 = await new Promise((resolve, reject) => {
+            ffmpeg.ffprobe(clip2, (err, metadata) => {
+              if (err) reject(err);
+              else resolve(metadata);
+            });
+          });
+
+          const hasVideo1 = probe1.streams.some(s => s.codec_type === 'video');
+          const hasVideo2 = probe2.streams.some(s => s.codec_type === 'video');
+
+          if (!hasVideo1 || !hasVideo2) {
+            console.warn(`Skipping clip ${i+1} - One or both input files are missing video streams: ${clip1}, ${clip2}`);
+            return; // Skip this clip and continue with the next one
+          }
+
+          // Basic filter chain with proper output mapping
           command
             .complexFilter(
-              '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v0];' +
-              '[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v1];' +
-              '[v0][v1]concat=n=2:v=1:a=0[outv]',
-              ['outv']
+              '[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v0];' +
+              '[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v1];' +
+              '[v0][v1]concat=n=2:v=1:a=0',
+              []
             )
             .outputOptions([
-              '-map', '[outv]',
               '-c:v', 'libx264',
               '-preset', 'ultrafast',
               '-crf', '23',
@@ -181,7 +203,12 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             ]);
 
           command.output(tempOutPath);
+        } catch (error) {
+          console.warn(`Error checking video streams for clip ${i+1}: ${error.message}`);
+          return; // Skip this clip and continue with the next one
+        }
 
+        await new Promise((resolve, reject) => {
           command.on('start', (commandLine) => {
             // console.log(`Starting FFmpeg with command: ${commandLine}`);
           });
@@ -213,7 +240,6 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
               } catch (cleanupError) {
                 // Ignore cleanup errors
               }
-              // console.error(`Error processing output file:`, error);
               reject(error);
             }
           });
@@ -225,7 +251,6 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
             } catch (cleanupError) {
               // Ignore cleanup errors
             }
-            // console.error(`Error processing ${tempOutPath}:`);
             console.error('FFmpeg stderr:', stderr);
             console.error('Error details:', err);
             reject(new Error(`FFmpeg error: ${err.message}`));
