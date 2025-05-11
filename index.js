@@ -220,8 +220,8 @@ async function mergeClips(clipsDir1, clipsDir2, outputSubDir, prefix1, prefix2, 
         // Then concatenate the processed videos
         await new Promise((resolve, reject) => {
           ffmpeg()
-            .input(temp1)
-            .input(temp2)
+            .input(temp2)  // Selfie first
+            .input(temp1)  // Product second
             .outputOptions([
               '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0',
               '-c:v', 'libx264',
